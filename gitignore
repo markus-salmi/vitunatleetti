@@ -1,0 +1,6 @@
+# NEVER commit this — it holds your bot token
+.env
+
+__pycache__/
+*.pyc
+seen_posts.json.tmp
