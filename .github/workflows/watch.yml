@@ -30,6 +30,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CATEGORIES: ${{ vars.CATEGORIES }}
         run: python telegrambot.py --once
 
       - name: Remember what we sent
