@@ -62,6 +62,8 @@ STATE_FILE = Path(os.getenv("STATE_FILE", "seen_posts.json"))
 POLL_INTERVAL = int(os.getenv("POLL_INTERVAL", "300"))  # seconds
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+# Comma-separated WordPress category IDs; empty means "everything".
+CATEGORIES = os.getenv("CATEGORIES", "").replace(" ", "")
 
 log = logging.getLogger("atleetti")
 
@@ -79,11 +81,10 @@ def _strip_tags(s: str) -> str:
 
 def fetch_wp_api() -> list[dict]:
     """WordPress REST API. Most reliable: real post IDs and timestamps."""
-    r = session.get(
-        WP_API_URL,
-        params={"per_page": 15, "orderby": "date", "_fields": "id,link,title,date_gmt"},
-        timeout=HTTP_TIMEOUT,
-    )
+    params = {"per_page": 15, "orderby": "date", "_fields": "id,link,title,date_gmt"}
+    if CATEGORIES:
+        params["categories"] = CATEGORIES
+    r = session.get(WP_API_URL, params=params, timeout=HTTP_TIMEOUT)
     r.raise_for_status()
     posts = []
     for item in r.json():
@@ -146,8 +147,11 @@ SOURCES = [("wp-api", fetch_wp_api), ("rss", fetch_rss), ("html", fetch_html)]
 
 def get_posts() -> list[dict]:
     """Try each source in order; return the first one that yields posts."""
+    # The RSS and HTML sources can't filter by category, so if a filter is set
+    # we only use the API rather than silently sending everything.
+    sources = SOURCES[:1] if CATEGORIES else SOURCES
     last_error = None
-    for name, fn in SOURCES:
+    for name, fn in sources:
         try:
             posts = fn()
             if posts:
@@ -245,6 +249,33 @@ def find_chat_id() -> None:
 # Main loop
 # --------------------------------------------------------------------------
 
+def list_categories() -> None:
+    """Print every category on the site with its ID and post count."""
+    cats, page = [], 1
+    while True:
+        r = session.get(
+            f"{SITE}/wp-json/wp/v2/categories",
+            params={"per_page": 100, "page": page,
+                    "_fields": "id,name,slug,count,parent"},
+            timeout=HTTP_TIMEOUT,
+        )
+        r.raise_for_status()
+        batch = r.json()
+        cats.extend(batch)
+        if len(batch) < 100:
+            break
+        page += 1
+
+    by_id = {c["id"]: c for c in cats}
+    print(f"{'ID':>6}  {'posts':>6}  name")
+    print("-" * 46)
+    for c in sorted(cats, key=lambda c: -c["count"]):
+        parent = by_id.get(c.get("parent"))
+        label = f"{parent['name']} > {c['name']}" if parent else c["name"]
+        print(f"{c['id']:>6}  {c['count']:>6}  {label}")
+    print("\nPut the IDs you want in .env, e.g.:  CATEGORIES=12,34")
+
+
 def check(seen: list[str], notify: bool) -> list[str]:
     posts = get_posts()
     known = set(seen)
@@ -276,6 +307,10 @@ def main() -> None:
     ap.add_argument("--notify-existing", action="store_true",
                     help="on first run, send posts already on the site")
     ap.add_argument("--find-chat-id", action="store_true", help="print your chat id and exit")
+    ap.add_argument("--list-categories", action="store_true",
+                    help="print every category on atleetti.fi with its ID, then exit")
+    ap.add_argument("--categories", default=None,
+                    help="only watch these category IDs, e.g. --categories 12,34")
     ap.add_argument("--test", action="store_true", help="send a test message and exit")
     ap.add_argument("--interval", type=int, default=POLL_INTERVAL, help="seconds between checks")
     ap.add_argument("-v", "--verbose", action="store_true")
@@ -287,9 +322,20 @@ def main() -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
+    global CATEGORIES
+    if args.categories is not None:
+        CATEGORIES = args.categories.replace(" ", "")
+
+    if args.list_categories:
+        list_categories()
+        return
+
     if args.find_chat_id:
         find_chat_id()
         return
+
+    if CATEGORIES:
+        log.info("watching only categories: %s", CATEGORIES)
 
     if not CHAT_ID:
         sys.exit("TELEGRAM_CHAT_ID is not set (run with --find-chat-id to look it up)")
