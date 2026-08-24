@@ -218,14 +218,21 @@ def send_post(post: dict) -> bool:
         f"<b>{html.escape(post['title'])}</b>\n"
         f'<a href="{html.escape(post["url"], quote=True)}">Lue juttu →</a>'
     )
-    result = telegram(
-        "sendMessage",
-        chat_id=CHAT_ID,
-        text=text,
-        parse_mode="HTML",
-        link_preview_options={"is_disabled": False},
-    )
-    return result is not None
+    # CHAT_ID may hold several comma-separated recipients
+    targets = [c.strip() for c in CHAT_ID.split(",") if c.strip()]
+    ok = True
+    for target in targets:
+        result = telegram(
+            "sendMessage",
+            chat_id=target,
+            text=text,
+            parse_mode="HTML",
+            link_preview_options={"is_disabled": False},
+        )
+        if result is None:
+            log.error("could not deliver to %s", target)
+            ok = False
+    return ok
 
 
 def find_chat_id() -> None:
